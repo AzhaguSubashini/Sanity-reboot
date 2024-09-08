@@ -1,0 +1,70 @@
+trigger:
+- main  # The branch where the pipeline triggers
+
+pool:
+  vmImage: 'ubuntu-latest'  # Use an Ubuntu runner
+
+steps:
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'YourAzureSubscription'  # The Azure subscription service connection in Azure DevOps
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      # Variables
+      RESOURCE_GROUP="your-resource-group-name"  # Set your resource group name
+      VM_NAME="your-vm-name"  # Set your VM name
+      FOLDER_PATH="/path/to/folder"
+      
+      # 1. Check current status of the server (Uptime)
+      echo "Checking server status (uptime)..."
+      server_status_pre=$(az vm run-command invoke --resource-group $RESOURCE_GROUP --name $VM_NAME --command-id RunShellScript --scripts "uptime" --query 'value[0].message' -o tsv)
+      echo "Server status before reboot: $server_status_pre"
+      
+      # 2. Check current version of the server OS
+      echo "Checking server OS version..."
+      server_version=$(az vm run-command invoke --resource-group $RESOURCE_GROUP --name $VM_NAME --command-id RunShellScript --scripts "uname -a" --query 'value[0].message' -o tsv)
+      echo "Server OS version: $server_version"
+      
+      # 3. Navigate to a specific folder (via run command)
+      echo "Navigating to folder $FOLDER_PATH..."
+      az vm run-command invoke --resource-group $RESOURCE_GROUP --name $VM_NAME --command-id RunShellScript --scripts "cd $FOLDER_PATH" 
+      
+      # 4. Take a snapshot of the server (pre-reboot)
+      echo "Taking snapshot before reboot..."
+      SNAPSHOT_PRE_REBOOT="snapshot-pre-reboot-$(date +%Y%m%d%H%M%S)"
+      az snapshot create --resource-group $RESOURCE_GROUP --source $VM_NAME --name $SNAPSHOT_PRE_REBOOT
+      echo "Snapshot taken: $SNAPSHOT_PRE_REBOOT"
+      
+      # 5. Reboot the server
+      echo "Rebooting the server..."
+      az vm restart --resource-group $RESOURCE_GROUP --name $VM_NAME --no-wait
+      echo "Reboot initiated..."
+
+      # 6. Wait for server to come back online
+      echo "Waiting for server to come back online..."
+      while ! nc -z -w5 $(az vm show --resource-group $RESOURCE_GROUP --name $VM_NAME --show-details --query "publicIps" -o tsv) 22; do
+        echo "Waiting for VM to respond to SSH on port 22..."
+        sleep 10
+      done
+      echo "Server is back online."
+
+      # 7. Take a snapshot of the server (post-reboot)
+      echo "Taking snapshot after reboot..."
+      SNAPSHOT_POST_REBOOT="snapshot-post-reboot-$(date +%Y%m%d%H%M%S)"
+      az snapshot create --resource-group $RESOURCE_GROUP --source $VM_NAME --name $SNAPSHOT_POST_REBOOT
+      echo "Snapshot taken: $SNAPSHOT_POST_REBOOT"
+      
+      # 8. Check current status of the server post-reboot
+      echo "Checking server status post-reboot (uptime)..."
+      server_status_post=$(az vm run-command invoke --resource-group $RESOURCE_GROUP --name $VM_NAME --command-id RunShellScript --scripts "uptime" --query 'value[0].message' -o tsv)
+      echo "Server status after reboot: $server_status_post"
+
+      # 9. Display server status before and after reboot
+      echo "Server status before reboot: $server_status_pre"
+      echo "Server OS version: $server_version"
+      echo "Snapshot before reboot: $SNAPSHOT_PRE_REBOOT"
+      echo "Snapshot after reboot: $SNAPSHOT_POST_REBOOT"
+      echo "Server status after reboot: $server_status_post"
+
+  displayName: 'Server Maintenance Tasks (Reboot, Snapshot, Status Check)'
